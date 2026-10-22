@@ -1,0 +1,220 @@
+You are a senior Rust systems engineer and a patient mentor. I am a Rust beginner on a team of 4 building, in 7 days, a "Tamper-Evident Audit Ledger for Financial Transactions Using an LSM Tree with Merkle-Verified SSTables" in Rust.
+
+Read docs/ROADMAP.md first. It is our spec. Do not contradict it without telling me why.
+
+STEP 0 — Inspect only (change nothing)
+Run git status, git log --oneline -5, cat Cargo.toml, cargo --version, cargo check, cargo test, and list the source files. Report:
+- Is this a single crate or a workspace?
+- Which of these already exist and work: memtable, WAL, SSTable, manifest, bloom filter, CLI, tests?
+- Which existing modules we should REUSE versus add, so we don't rebuild working code.
+Then stop and wait for me to say "go".
+
+STEP 1 — Foundation (only after I say "go")
+Create the shared skeleton so 4 people can work in parallel without merge conflicts:
+1. Shared types: Entry, Kind (Put/Delete), Transaction (amounts in integer paise), and one crate-wide Error type with Result alias.
+2. Trait or function signatures with stub bodies that compile (return Err(NotImplemented), not todo!()) for: Memtable (insert, get, iter, approx_size), Wal (append, replay, sync), SsTable (build, open, get, iter), Merkle (hash_leaf, root, verify), Manifest (load, commit, list_tables), Db (open, record, get, flush, verify).
+3. Freeze and document these decisions in docs/FILE_FORMAT.md, each with a one-line reason:
+   - byte order and integer widths
+   - get() return type
+   - SSTable layout (header, data blocks ~4 KiB, sparse index, optional bloom, Merkle metadata, footer)
+   - Merkle rules: leaf hash = SHA-256(0x00 || block bytes), parent hash = SHA-256(0x01 || left || right), the rule for an odd number of leaves, what the root covers (everything except the root itself), no circular hashing
+   - trusted checkpoint JSON schema (file names, sizes, roots, generation number)
+   - WAL record framing (length, seq, payload, CRC32)
+   - duplicate transaction IDs are rejected in the public ledger API
+4. .github/workflows/ci.yml (fmt check, clippy -D warnings, cargo test), .gitignore (target/, db dirs, keys), and docs/ARCHITECTURE.md.
+5. Stub integration test files under tests/ (persistence, integrity, recovery) marked #[ignore] with a comment on what each must prove.
+6. Output: a list of GitHub issues (title, owner A/B/C/D, acceptance test) and the exact git commands for branches feat/memtable-db, feat/wal-recovery, feat/sstable, feat/merkle-cli.
+
+RULES
+- Implement NO real logic yet, only structure, signatures and docs.
+- Commit on a branch named chore/foundation. Do not push.
+- Make sure cargo fmt, cargo clippy and cargo test all pass before you finish.
+- Keep dependencies minimal: sha2, crc32fast, clap, serde/serde_json only if needed. Explain each one in a sentence.
+- Explain Rust constructs you use for the first time with a simple analogy.
+- End with a 10-line Rust cheatsheet of the constructs in the skeleton.
+
+
+You are a senior Rust engineer and a patient mentor. I am a Rust beginner. Our team is building the MerkleLSM audit ledger in 3 days. Read docs/ROADMAP.md, docs/FILE_FORMAT.md and docs/ARCHITECTURE.md before writing anything.
+
+MY ROLE: [A: Memtable + Db | B: WAL + Manifest + recovery | C: SSTable + index + read path | D: Merkle + checkpoint + CLI + tamper demo]
+MY BRANCH: [feat/...]
+FILES I OWN: [from the roadmap's role split]
+
+TASK
+Implement my module against the frozen signatures. Work in this order:
+1. Write the unit tests first, including edge cases and failure cases from the roadmap's test checklist that apply to my module.
+2. Implement until the tests pass.
+3. Run cargo fmt, cargo clippy -- -D warnings, and cargo test.
+
+RULES
+- Edit only the files I own plus their tests. Do NOT change shared types, signatures, or the file format. If you think one needs to change, stop and write a "proposed interface change" note for the team instead.
+- No unsafe code, no async, no threads. Keep it simple and readable.
+- Make small commits with clear messages on my branch. Do not push or merge.
+- Work one function at a time. After each major function, give a 3-line explanation of what it does and which Rust concept it uses, with a beginner analogy.
+- Never clear the WAL before the SSTable and manifest are safely committed. Never silently ignore a CRC failure on a complete record.
+
+WHEN YOU FINISH
+1. Summary: what is done, what is stubbed, and the test results.
+2. "What I must be able to explain in the demo": 5 viva questions with short answers for my module.
+3. A cheatsheet of the Rust constructs used in my module.
+4. Known limitations I should mention honestly.
+
+
+
+# MerkleLSM: Team Guide
+*A tamper-evident audit ledger built on an LSM Tree, in Rust. One week, four people.*
+---
+## 1. What are we building? (the 30-second version)
+We are building a **mini database** that:
+1. Saves data **very fast** (that is what an LSM Tree is good at).
+2. Survives **crashes** without losing data.
+3. Can **prove nobody secretly edited** the saved data (that is the Merkle tree part).
+Real-world use: bank or audit records, where "was this changed later?" matters as much as saving the data.
+**Our data structure for the project sheet:** LSM Tree.
+Supporting pieces: skip list, Bloom filter, Merkle tree.
+---
+## 2. The analogy: a busy accountant's office
+Imagine an accountant who receives hundreds of receipts a day.
+| In the office | In our project | What it does |
+|---|---|---|
+| The **diary** where every receipt is written down first, in order | **WAL** (write-ahead log) | If the power goes out, the diary lets us rebuild what we lost |
+| The **sticky-note pad** on the desk, kept sorted | **Memtable** (a skip list) | Fast place to put new data, held in memory |
+| When the pad is full, the notes are filed into a **sorted folder** that is never edited again | **SSTable** (sorted string table) | Permanent, sorted, read-only file on disk |
+| A quick glance at a folder's label: "this key is definitely NOT in here" | **Bloom filter** | Skips folders we don't need to open |
+| Merging many small folders into one tidy folder | **Compaction** | Keeps reads fast and the folder count low |
+| A **wax seal** on each folder, built from seals on each page | **Merkle tree / Merkle root** | If anyone changes even one page, the seal no longer matches |
+| An inspector checking every seal | **`verify` command** | Finds exactly which folder and page was tampered with |
+**The key idea:** writing is cheap because we only *add* to the pad and the diary. We never go back and edit old folders. Reading checks the pad first, then folders from newest to oldest.
+---
+## 3. How it works, step by step
+**Writing (`put`)**
+1. Write the record to the diary (WAL), so it survives a crash.
+2. Put it on the sticky-note pad (memtable).
+3. When the pad is full, file it as a new sorted folder (SSTable) and add a wax seal (Merkle root).
+**Reading (`get`)**
+1. Look on the pad.
+2. If not found, check folders from newest to oldest. A Bloom filter skips folders that cannot have it.
+3. The newest version of the key wins. A "deleted" marker (tombstone) means the key is gone.
+**Checking (`verify`)**
+1. Re-read every page of a folder and recompute its seal.
+2. Compare with the seal stored when the folder was created.
+3. Mismatch means tampering, and we report the exact folder and block.
+---
+## 4. Who does what
+Fill in names: **A = ______, B = ______, C = ______, D = ______**
+### Person A: The Sticky-Note Pad and the Front Desk
+**Owns:** `memtable/` and `db.rs`
+- Build a **skip list** (store nodes in a `Vec` and link them by index, so no `unsafe` code)
+- Support `insert`, `get`, ordered iteration, and a size counter so we know when it's "full"
+- Write `db.rs`, which connects everything: `Db::open`, `put`, `get`, `delete`, `scan`, `flush`
+- Handle sequence numbers (every write gets a bigger number than the last)
+**Done when:** skip-list tests pass; `Db` can put and get across flushes.
+**Learn first:** Rust ownership basics, `Vec`, `Option`, how a skip list works.
+### Person B: The Diary and Crash Recovery
+**Owns:** `wal/` and file handling
+- Define the WAL record format: `[crc32][length][type][seq][key_len][key][value_len][value]`
+- Append records and call `sync_all()` for durability
+- On startup, **replay** the WAL into the memtable; stop cleanly at a half-written record (bad CRC or short read)
+- Handle WAL rotation after a flush, and keep track of SSTable file names and numbering
+- Write the **crash test**: truncate the WAL at random points, reopen, and check nothing complete is lost
+**Done when:** killing the program mid-write and restarting recovers all complete records.
+**Learn first:** `std::fs`, `BufWriter`, the `crc32fast` crate.
+### Person C: The Folders (SSTables)
+**Owns:** `sstable/` and `bloom.rs`
+- **Builder:** write sorted entries into ~4 KB blocks, then an index block, then a footer
+- **Reader:** open a file, binary-search the index, read one block, return the entry
+- **Iterator:** walk an SSTable in order (needed for scans and compaction)
+- Hand each block's bytes to Person D's `hash_block`, and store the leaf hashes and Merkle root in the file
+- Stretch: Bloom filter per SSTable; simple compaction (merge all SSTables into one using a heap)
+**Done when:** flush a memtable, restart, and read every key back from the file.
+**Learn first:** binary file layouts, `BufReader`, `seek`, and byte encoding.
+### Person D: The Wax Seals, the Inspector, and the Shop Window
+**Owns:** `merkle/`, `main.rs` (CLI), CI, README, docs
+- **Merkle:** `hash_block(bytes) -> [u8; 32]` using `sha2`; build a tree from leaf hashes; return the root; verify a tree
+- **`verify` command:** recompute and compare roots, then report the exact file and block that failed
+- **`tamper` demo command:** flip one byte in a chosen block, so we can show detection live
+- Stretch: `prove <key>` (block hash plus sibling hashes up to the root)
+- **CLI** with `clap`: `put`, `get`, `delete`, `scan`, `flush`, `compact`, `verify`, `stats`
+- Set up GitHub, CI (fmt, clippy, test), README, and docs; keep the demo script up to date
+**Done when:** corrupting one byte makes `verify` point to the exact block.
+**Learn first:** how Merkle trees work, the `sha2` and `clap` crates.
+---
+## 5. Shared contract (agree on this on Day 1)
+Everyone codes against the same types. Change them only by talking to the team.
+```rust
+pub enum Kind { Put, Delete }
+pub struct Entry {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+    pub seq: u64,
+    pub kind: Kind,
+}
+pub enum Error {
+    Io(std::io::Error),Corruption(String),
+    TamperDetected(String),
+    InvalidFormat(String),
+}
+pub type Result<T> = std::result::Result<T, Error>;
+```
+Proposed function shapes (adjust together on Day 1):
+```rust
+// A: memtable
+Memtable::new() -> Memtable
+Memtable::put(&mut self, key: Vec<u8>, value: Vec<u8>, seq: u64)
+Memtable::delete(&mut self, key: Vec<u8>, seq: u64)
+Memtable::get(&self, key: &[u8]) -> Option<&Entry>
+Memtable::approx_size(&self) -> usize
+// B: wal
+Wal::open(path) -> Result<Wal>
+Wal::append(&mut self, e: &Entry) -> Result<()>
+Wal::replay(path) -> Result<Vec<Entry>>
+// C: sstable
+SsTableBuilder::add(&mut self, e: &Entry) -> Result<()>
+SsTableBuilder::finish(self) -> Result<()>
+SsTableReader::open(path) -> Result<SsTableReader>
+SsTableReader::get(&self, key: &[u8]) -> Result<Option<Entry>>
+// D: merkle
+merkle::hash_block(bytes: &[u8]) -> [u8; 32]
+merkle::root(leaves: &[[u8; 32]]) -> [u8; 32]
+merkle::verify_file(path) -> Result<()>
+```
+---
+## 6. One-week timeline
+| Day | Goal |
+|---|---|
+| 1 | Create repo and CI. Agree on the shared contract. Each person starts their module with unit tests. |
+| 2 | Finish individual modules. D builds Merkle on raw bytes, so no one is blocked. |
+| 3 | **First integration:** put, restart, get works end to end. |
+| 4 | Multiple SSTables, deletes (tombstones), `scan`. Merkle roots written on flush. |
+| 5 | `verify`, the `tamper` demo, and the full CLI. Simple compaction if on track. |
+| 6 | Bloom filter or `prove`. Integration tests. One simple timing benchmark. |
+| 7 | README, docs, demo rehearsal. **Freeze code in the morning.** |
+---
+## 7. Team rules
+- `main` must always build and pass tests. Work in branches (`feature/memtable`, `feature/wal`, ...) and merge by pull request.
+- Someone else reviews every pull request. This is also how you learn each other's code.
+- Merge small and often, at least once a day.
+- No `unwrap()` in library code. Return `Result` and use the shared `Error`.
+- No stretch features until the end-to-end flow works.
+- Stuck on the borrow checker for more than 30 minutes? Ask a teammate or pair up.
+- Everyone must be able to explain the whole project in the viva, not only their own module.
+---
+## 8. Glossary
+- **LSM Tree:** a storage design that buffers writes in memory and flushes them as sorted, immutable files, then merges those files over time.
+- **WAL (write-ahead log):** an append-only file that records each write before it is applied, so crashes don't lose data.
+- **Memtable:** the in-memory sorted structure that receives new writes.
+- **SSTable:** an immutable, sorted file on disk.
+- **Tombstone:** a marker meaning "this key was deleted".
+- **Compaction:** merging SSTables to reduce file count and clean up old data.
+- **Bloom filter:** a compact structure that says "definitely not present" or "maybe present".
+- **Merkle tree:** a tree of hashes where each parent hashes its children; the top hash (root) changes if any leaf changes.
+- **Merkle proof:** the small set of hashes that proves one block belongs to a given root.
+- **Sequence number:** an ever-increasing counter that orders writes.
+---
+## 9. References for inspiration
+- [skyzh/mini-lsm](https://github.com/skyzh/mini-lsm): LSM engine structure in Rust
+- [BBVA/qed](https://github.com/BBVA/qed): tamper-evident logging with Merkle structures
+- O'Neil et al., *The Log-Structured Merge-Tree* (1996)
+
+
+
