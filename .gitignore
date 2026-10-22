@@ -1,0 +1,8 @@
+/target/
+/demo-db/
+/bench-db/
+/presentation-db/
+/presentation-artifacts/
+*.key
+*.pem
+
