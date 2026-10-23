@@ -355,6 +355,38 @@ impl SsTable {
             Err(e) => vec![Err(e)],
         })
     }
+    /// Export the complete framed block containing a requested key.
+    pub fn inclusion_proof(&self, key: &[u8]) -> Result<Option<crate::proof::TransactionProof>> {
+        self.verify()?;
+        if self.get(key)?.is_none() {
+            return Ok(None);
+        }
+        let block = self
+            .metadata
+            .index
+            .partition_point(|item| item.first_key.as_slice() <= key)
+            - 1;
+        let bytes = fs::read(&self.path)?;
+        let root_start = bytes.len() - 32;
+        let hash_start = root_start - FOOTER_LEN - self.leaves.len() * 32;
+        let mut leaves = self.leaves.clone();
+        leaves.push(merkle::hash_leaf(&bytes[hash_start..root_start]));
+        let item = &self.metadata.index[block];
+        let start = item.offset as usize;
+        let proof = crate::proof::TransactionProof {
+            version: 1,
+            table: self.meta.file.clone(),
+            framed_block: bytes[start..start + 4 + item.length as usize].to_vec(),
+            path: merkle::prove(&leaves, block + 1)
+                .ok_or_else(|| Error::InvalidInput("invalid proof block".into()))?,
+        };
+        if !proof.path.verify(&proof.framed_block, &self.meta.root) {
+            return Err(Error::TamperDetected(
+                "table changed during proof export".into(),
+            ));
+        }
+        Ok(Some(proof))
+    }
     pub fn verify(&self) -> Result<()> {
         Self::open(&self.path, &self.meta).map(|_| ())
     }

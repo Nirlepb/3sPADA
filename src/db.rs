@@ -295,6 +295,22 @@ impl Db {
         }
         Ok(output)
     }
+    /// Pending transactions must be flushed explicitly before exporting a proof.
+    pub fn transaction_proof(&self, id: &str) -> Result<crate::proof::TransactionProof> {
+        self.healthy()?;
+        let key = namespaced(b't', id.as_bytes())?;
+        if self.memtable.get(&key).is_some() {
+            return Err(Error::InvalidInput(
+                "transaction is pending; flush first".into(),
+            ));
+        }
+        for table in self.tables.iter().rev() {
+            if let Some(proof) = table.inclusion_proof(&key)? {
+                return Ok(proof);
+            }
+        }
+        Err(Error::InvalidInput("unknown transaction ID".into()))
+    }
     pub fn transactions(&self) -> Result<Vec<Transaction>> {
         self.merged()?
             .into_values()

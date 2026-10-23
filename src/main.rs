@@ -79,6 +79,17 @@ enum Command {
     Checkpoint {
         output: PathBuf,
     },
+    /// Export a block inclusion proof for a flushed transaction.
+    Prove {
+        id: String,
+        output: PathBuf,
+    },
+    /// Verify a proof offline against an independently trusted checkpoint.
+    VerifyProof {
+        id: String,
+        proof: PathBuf,
+        checkpoint: PathBuf,
+    },
     Stats,
     /// Deliberately corrupt one byte. Use only on a disposable demo database.
     Tamper {
@@ -100,6 +111,21 @@ fn main() -> ExitCode {
     }
 }
 fn run(cli: Cli) -> Result<()> {
+    if let Command::VerifyProof {
+        id,
+        proof,
+        checkpoint,
+    } = &cli.command
+    {
+        if std::fs::metadata(proof)?.len() > 16 * 1024 * 1024 {
+            return Err(Error::InvalidInput("proof JSON exceeds 16 MiB".into()));
+        }
+        let proof: merklelsm::proof::TransactionProof =
+            serde_json::from_slice(&std::fs::read(proof)?)?;
+        let transaction = proof.verify(id, &Manifest::read(checkpoint)?)?;
+        println!("{}", serde_json::to_string_pretty(&transaction)?);
+        return Ok(());
+    }
     if matches!(cli.command, Command::Present) {
         return presentation::run(
             cli.db,
@@ -231,6 +257,17 @@ fn run(cli: Cli) -> Result<()> {
             db.checkpoint(&output)?;
             println!("Checkpoint created: {}", output.display());
         }
+        Command::Prove { id, output } => {
+            let proof = db.transaction_proof(&id)?;
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(output)?;
+            file.write_all(&serde_json::to_vec_pretty(&proof)?)?;
+            file.sync_all()?;
+            println!("Transaction block proof exported");
+        }
+        Command::VerifyProof { .. } => unreachable!("handled before database open"),
         Command::Stats => println!("{}", serde_json::to_string_pretty(&db.stats())?),
         Command::Tamper { .. } | Command::Present => {
             unreachable!("handled before opening database")
