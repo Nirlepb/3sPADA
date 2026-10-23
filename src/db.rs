@@ -343,7 +343,11 @@ impl Db {
         let entries: Vec<_> = self.memtable.iter().cloned().collect();
         let mut next = self.next_manifest()?;
         let path = self.dir.join(format!("table-{:020}.sst", next.generation));
+        #[cfg(feature = "fault-injection")]
+        crate::fault::hit("flush-before-table")?;
         let table = SsTable::build(&path, &entries)?;
+        #[cfg(feature = "fault-injection")]
+        crate::fault::hit("flush-after-table")?;
         self.trace(format!("SSTable built from {} sorted entries in {} blocks; index, Bloom filter and Merkle root created; file synced and published: {}", entries.len(), table.block_count(), table.meta.file));
         self.trace(format!(
             "Merkle root: {}",
@@ -351,6 +355,8 @@ impl Db {
         ));
         next.tables.push(table.meta.clone());
         next.commit(&self.dir)?;
+        #[cfg(feature = "fault-injection")]
+        crate::fault::hit("flush-after-manifest")?;
         self.trace(format!(
             "Manifest generation {} synced and atomically published",
             next.generation
@@ -427,6 +433,8 @@ impl Db {
         }
         next.commit(&self.dir)?;
         self.trace(format!("Compacted output has {} live entries; published manifest generation {} before deleting retired files", merged.len(), next.generation));
+        #[cfg(feature = "fault-injection")]
+        crate::fault::hit("compact-after-manifest")?;
         let retired = self.manifest.tables.clone();
         self.manifest = next;
         self.tables = table.into_iter().collect();

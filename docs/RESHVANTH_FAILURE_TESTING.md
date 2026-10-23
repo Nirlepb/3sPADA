@@ -1,0 +1,5 @@
+# Controlled publication failures
+
+Hooks exist only with `--features fault-injection`. Default builds never consult the hook environment. In an explicitly enabled process set MERKLELSM_FAULT_STAGE to flush-before-table, flush-after-table, flush-after-manifest or compact-after-manifest, and MERKLELSM_FAULT_ACTION to exit or error. Exit uses status 86 without running destructors; error returns an I/O error and poisons the current handle.
+
+Run `cargo test --locked --features fault-injection --test failure_injection -- --nocapture`. The test initializes acknowledged data in the parent, runs each hook/action in a separate process, checks poisoning there for returned errors, and then verifies recovered values and continued sequence numbers in the parent. Before publication WAL restores acknowledged writes; after publication old WAL frames are redundant. Orphan/retired files do not override the manifest. This models process termination and explicit boundary errors, not a hardware power cut or arbitrary partial I/O.
