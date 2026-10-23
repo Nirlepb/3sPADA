@@ -15,3 +15,4 @@ jobs:
       - run: cargo test --locked --all-targets
       - run: cargo test --locked --doc
       - run: bash scripts/demo.sh
+      - run: cargo test --locked --all-targets --features fault-injection

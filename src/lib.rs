@@ -14,3 +14,6 @@ pub mod wal;
 pub use db::{Db, Options, Stats};
 pub use error::{Error, Result};
 pub use types::{Entry, Kind, Transaction};
+
+#[cfg(feature = "fault-injection")]
+pub mod fault;
