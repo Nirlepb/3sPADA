@@ -86,6 +86,15 @@ impl Memtable {
             next: self.head[0],
         }
     }
+    /// Seek through skip-list levels, then walk only the requested interval.
+    pub fn range<'a>(&'a self, start: &[u8], end: &'a [u8]) -> impl Iterator<Item = &'a Entry> {
+        let before = self.predecessors(start);
+        Iter {
+            table: self,
+            next: self.next(before[0], 0),
+        }
+        .take_while(move |entry| entry.key.as_slice() < end)
+    }
     pub fn approx_size(&self) -> usize {
         self.bytes
     }
