@@ -6,6 +6,7 @@ pub mod error;
 pub mod manifest;
 pub mod memtable;
 pub mod merkle;
+pub mod proof;
 pub mod sstable;
 pub mod types;
 pub mod wal;
