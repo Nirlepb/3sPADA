@@ -387,6 +387,32 @@ impl SsTable {
         }
         Ok(Some(proof))
     }
+    /// Candidate blocks only; each block is authenticated by read_block.
+    pub fn range<'a>(
+        &'a self,
+        start: &'a [u8],
+        end: &'a [u8],
+        reads: &'a std::cell::Cell<usize>,
+    ) -> impl Iterator<Item = Result<Entry>> + 'a {
+        let first = self
+            .metadata
+            .index
+            .partition_point(|item| item.first_key.as_slice() <= start)
+            .saturating_sub(1);
+        (first..self.metadata.index.len())
+            .take_while(move |&block| self.metadata.index[block].first_key.as_slice() < end)
+            .flat_map(move |block| {
+                reads.set(reads.get() + 1);
+                match self.read_block(block) {
+                    Ok(entries) => entries
+                        .into_iter()
+                        .filter(|e| e.key.as_slice() >= start && e.key.as_slice() < end)
+                        .map(Ok)
+                        .collect::<Vec<_>>(),
+                    Err(error) => vec![Err(error)],
+                }
+            })
+    }
     pub fn verify(&self) -> Result<()> {
         Self::open(&self.path, &self.meta).map(|_| ())
     }

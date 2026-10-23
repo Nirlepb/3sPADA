@@ -279,21 +279,77 @@ impl Db {
     }
     /// Lexicographic byte order, inclusive start and exclusive end.
     pub fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Vec<Entry>> {
+        self.scan_with_block_reads(start, end)
+            .map(|(entries, _)| entries)
+    }
+    /// Reads counted during this query; opening a database still verifies all tables.
+    pub fn scan_with_block_reads(
+        &self,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+    ) -> Result<(Vec<Entry>, usize)> {
+        self.healthy()?;
         if start.zip(end).is_some_and(|(a, b)| a > b) {
             return Err(Error::InvalidInput("scan start is after end".into()));
         }
-        let mut output = vec![];
-        for (_, mut entry) in self.merged()? {
-            if !entry.key.starts_with(b"k:") || entry.kind == Kind::Delete {
-                continue;
+        if start.zip(end).is_some_and(|(a, b)| a == b) {
+            return Ok((vec![], 0));
+        }
+        let mut lower = b"k:".to_vec();
+        lower.extend_from_slice(start.unwrap_or_default());
+        let upper = match end {
+            Some(end) => {
+                let mut key = b"k:".to_vec();
+                key.extend_from_slice(end);
+                key
             }
-            let key = &entry.key[2..];
-            if start.is_none_or(|s| key >= s) && end.is_none_or(|e| key < e) {
-                entry.key = key.to_vec();
-                output.push(entry);
+            None => b"k;".to_vec(),
+        };
+        let reads = std::cell::Cell::new(0);
+        let mut streams: Vec<Box<dyn Iterator<Item = Result<Entry>> + '_>> = self
+            .tables
+            .iter()
+            .map(|table| {
+                Box::new(table.range(&lower, &upper, &reads))
+                    as Box<dyn Iterator<Item = Result<Entry>>>
+            })
+            .collect();
+        streams.push(Box::new(
+            self.memtable.range(&lower, &upper).cloned().map(Ok),
+        ));
+        let mut pending = vec![None; streams.len()];
+        let mut heap = BinaryHeap::new();
+        for (i, stream) in streams.iter_mut().enumerate() {
+            if let Some(entry) = stream.next() {
+                let entry = entry?;
+                heap.push(Reverse((entry.key.clone(), i)));
+                pending[i] = Some(entry);
             }
         }
-        Ok(output)
+        let mut output: Vec<Entry> = vec![];
+        while let Some(Reverse((_, i))) = heap.pop() {
+            let entry = pending[i]
+                .take()
+                .ok_or_else(|| Error::Corruption("scan heap lost entry".into()))?;
+            if let Some(last) = output.last_mut().filter(|last| last.key == entry.key) {
+                if entry.seq > last.seq {
+                    *last = entry;
+                }
+            } else {
+                output.push(entry);
+            }
+            if let Some(entry) = streams[i].next() {
+                let entry = entry?;
+                heap.push(Reverse((entry.key.clone(), i)));
+                pending[i] = Some(entry);
+            }
+        }
+        output.retain(|entry| entry.kind != Kind::Delete);
+        for entry in &mut output {
+            entry.key.drain(..2);
+        }
+        self.trace(format!("Bounded scan read {} data blocks", reads.get()));
+        Ok((output, reads.get()))
     }
     /// Pending transactions must be flushed explicitly before exporting a proof.
     pub fn transaction_proof(&self, id: &str) -> Result<crate::proof::TransactionProof> {
