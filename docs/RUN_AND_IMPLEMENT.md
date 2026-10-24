@@ -1,6 +1,6 @@
 # Running, presenting, and extending MerkleLSM
 
-This guide covers two tasks: demonstrating the application that already works, and implementing the proposed teammate contributions. The existing interactive application is ready to run. The three enhancement assignments below are proposals and have not yet been implemented.
+This guide covers the interactive application and all three merged teammate contributions. Bounded scans are part of the existing scan/menu flow; failure injection is an optional test feature; inclusion proofs have separate CLI commands.
 
 ## 1. Prepare the project
 
@@ -12,7 +12,7 @@ cargo --version
 cargo build --locked
 ```
 
-On a teammate's machine, first clone the actual GitHub repository, enter the cloned project folder, and run the same Cargo commands. The owner must publish the baseline implementation before other clones can receive it. At the time this guide was written, the implementation was still local working-tree changes; this task does not commit or publish them.
+On a teammate's machine, clone or update the shared GitHub repository, enter the cloned project folder, and run the same Cargo commands. The locally recorded `main` already contains the baseline and three merged feature PRs. This integrity audit leaves its additional validation/documentation changes in the local working tree.
 
 The project declares Rust 1.89 or newer and is tested on Linux. The first build downloads dependencies. Later builds can use `--offline` if the dependencies are already cached. No database server or account credentials are needed.
 
@@ -20,11 +20,12 @@ For a pre-presentation check:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 ```
 
-The last verified baseline has 33 passing test functions. Tests added by teammates will increase that number.
+The integrated audit suite has 40 default-build test functions and 42 with all features enabled. Child-worker helpers are included in those totals; their parents exercise real subprocess failures. See [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md) for validation details.
 
 ## 2. Start the live menu
 
@@ -183,183 +184,67 @@ cargo test --locked --all-targets
 
 Explain one result instead of only quoting the number of passing tests. For example: “A complete record with a bad CRC is rejected as corruption; only a physically unfinished final record can be removed during recovery.”
 
-## 4. Who presents what
+## 4. Merged feature ownership
 
-| Presenter | Existing demonstration | New work they can own |
+| Presenter | Implemented contribution | Feature notes |
 | --- | --- | --- |
-| Tharunn | Input, overall write path, integration | Integrate the enhancements and keep docs/demo consistent |
-| Nirlep | Skip list, scans, versions, tombstones | Efficient bounded range scans |
-| Reshvanth | WAL, recovery, publication ordering | Controlled failure injection and recovery verification |
-| Vijay | Hashes, roots, checkpoints, copy tamper | Block-level Merkle inclusion proofs |
+| Tharunn | Baseline, integration, interactive presentation | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Nirlep | Bounded skip-list/table iterators and heap-merged scans | [NIRLEP_RANGE_SCANS.md](NIRLEP_RANGE_SCANS.md) |
+| Reshvanth | Optional named failure hooks and subprocess recovery tests | [RESHVANTH_FAILURE_TESTING.md](RESHVANTH_FAILURE_TESTING.md) |
+| Vijay | Merkle paths, transaction block proofs, offline proof CLI | [VIJAY_MERKLE_PROOFS.md](VIJAY_MERKLE_PROOFS.md) |
 
-The existing version was implemented as the baseline. Teammates should identify their actual additions and fixes when describing contributions. The following sections are implementation assignments, not features already available in the menu.
+The feature PRs are already integrated into `main`. Do not apply the handoff patches again. Their comparison with the merged source is recorded in [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md). Describe supplied implementation code, individual review/adaptations, and validation accurately when explaining contributions.
 
-## 5. Prepare the shared implementation workflow
+## 5. Nirlep: bounded range scans
 
-Before branching, the owner should review and commit the baseline on the team's chosen integration branch, then publish it through the team's normal GitHub workflow. Others can then clone or update their copies. Sharing only the earlier README commit would not give them the working Rust project.
+`Memtable::range` seeks through skip-list levels. `SsTable::range` uses the sparse index to select candidate blocks, then authenticates every block it reads. `Db::scan_with_block_reads` heap-merges these streams with memory, keeps the greatest sequence for each key, and suppresses tombstones after merging. `Db::scan` uses the same implementation.
 
-Each teammate starts from that same baseline and creates one branch in their own clone:
-
-```bash
-# Nirlep runs this command in his clone:
-git switch -c feat/range-scans
-
-# Reshvanth runs this command in his clone:
-git switch -c feat/recovery-failure-testing
-
-# Vijay runs this command in his clone:
-git switch -c feat/merkle-proofs
-```
-
-These are three alternatives for three people, not three commands to run consecutively in one working copy.
-
-Each feature owner should submit a small design note, implementation, meaningful tests, updated documentation, a demo of their change, and a review of someone else's change. Commit the actual work in sensible steps. Each pull request should explain the problem, behavior, validation, and limitations.
-
-`db.rs`, `sstable/mod.rs`, and presentation integration are shared touchpoints. Agree on the new method names and types first. Nirlep and Vijay should coordinate their SSTable changes; Tharunn can integrate their small adapters and resolve overlaps. No change should silently redefine the existing on-disk layout or Merkle rules.
-
-## 6. Nirlep: implement efficient range scans
-
-### Current behavior
-
-`Db::scan` uses `merged()` to read entries into a `BTreeMap` before applying range bounds. It is correct for the covered cases, but even a narrow range can read unrelated entries.
-
-### Files to study and extend
-
-- `src/memtable/mod.rs`: skip-list search, forward links, and iteration.
-- `src/sstable/mod.rs`: sparse index, block reads, ordered iterator.
-- `src/db.rs`: `scan`, `merged`, namespace rules, and heap merge used by compaction.
-- New `tests/range_scan.rs` and existing persistence tests.
-
-### Implementation order
-
-1. Define lower-bound range iteration for the memtable. Reuse skip-list search to find the first key at or above the start, then follow level-zero links until the end.
-2. Add an SSTable range iterator. Binary-search the sparse index and include the block that can contain the start, even when its first key is smaller. Read successive candidate blocks only until the upper bound is reached.
-3. Merge the bounded streams using a heap. Group equal keys, retain the greatest sequence, and only then suppress tombstones.
-4. Apply the internal `k:` namespace correctly. Public scan bounds describe user bytes; an unbounded end must still stop at the end of that namespace.
-5. Keep `Db::scan`'s public return type and inclusive-start/exclusive-end behavior. It can still collect matching results into a vector. Do not claim bounded total memory while returning all results in that vector.
-6. Add observable block-read counts for verification. Use them to show that a narrow query reads fewer blocks than a full scan on the same multi-block dataset.
-
-A Bloom filter is a point-membership shortcut; it must not be used to reject a whole key interval based on one queried key.
-
-### Completion checks
-
-Test missing bounds, equal bounds, reversed bounds, a start inside a block, an end on a block boundary, empty results, byte/Unicode ordering, repeated updates, memory/disk overlap, and a tombstone hiding an older value. Compare results against a reference map.
-
-Run after those tests have been created:
+Public bounds are inclusive start and exclusive end in byte order. Results remain in the mutable `k:` namespace. Equal bounds return no entries and read no blocks; reversed bounds return an input error. Results are collected in memory, and opening the database still verifies all tables.
 
 ```bash
 cargo test --locked --test range_scan
+cargo run --locked -- --db presentation-db scan --start s --end u
 ```
 
-For the new demo, create a multi-block dataset and enter a narrow range through menu 10. Show the correct values and measured reduction in block reads. The block-read counter/demo still needs implementing.
+Menu option 10 uses the same scan and its trace reports block reads. The test compares narrow/full query block counts on a multi-block dataset, checks binary keys and version/tombstone semantics across compaction/reopen, and detects a selected block changed after opening.
 
-## 7. Reshvanth: implement controlled failures and recovery evidence
+## 6. Reshvanth: controlled publication failures
 
-### Current behavior
-
-Existing tests already cover truncated WAL records, complete CRC failures, reconstructed publication states, a forced manifest-write failure, and termination of a real process. Extend this with precisely controlled failures during the real flush and compaction paths.
-
-### Files to study and extend
-
-- `src/wal/mod.rs`: append, replay, sync, reset.
-- `src/manifest.rs`: atomic write and directory sync.
-- `src/db.rs`: `flush_inner`, `compact_inner`, poisoned handle, replay sequence handling.
-- `tests/recovery.rs`, `tests/crash_process.rs`, and new `tests/failure_injection.rs`.
-
-### Implementation order
-
-1. Document the persistence stages and the invariant expected at each one.
-2. Design named failure hooks. Keep them disabled in normal builds; an explicit Cargo feature such as `fault-injection` can enable the test machinery. That feature does not exist yet.
-3. Put hooks at meaningful boundaries: before table publication; after table publication but before manifest publication; after manifest publication but before WAL reset; and after compaction publication but before retired-file deletion.
-4. In subprocess tests, stop the writer at the chosen hook without running cleanup. Record which operations were already acknowledged before termination.
-5. Reopen the database and verify all acknowledged writes, sequence continuity, correct table visibility, and harmless orphan files.
-6. Separately simulate returned I/O errors. Verify the handle becomes poisoned and does not continue writing until reopened.
-7. If a case fails, fix the root cause and keep the regression test. Do not make recovery pass by silently ignoring a complete bad record.
-
-The hooks must preserve the normal publication order. A default production run must not terminate because someone accidentally set a testing environment variable. Feature-gated integration tests need a library feature; `#[cfg(test)]` alone does not expose library hooks to an integration-test binary.
-
-### Completion checks
-
-| Failure boundary | Expected recovery |
-| --- | --- |
-| Before manifest publication | Old manifest remains authoritative; WAL retains acknowledged writes |
-| After manifest publication, before WAL reset | Published tables are visible; older WAL records replay idempotently |
-| After compaction publication, before cleanup | Replacement remains authoritative; leftover old files are ignored |
-| Returned write error | Current handle refuses continued operations until reopened |
-
-After adding the feature and test file, the proposed command is:
+The `fault-injection` feature enables `MERKLELSM_FAULT_STAGE` and `MERKLELSM_FAULT_ACTION`. Default builds ignore these hooks. Named stages are `flush-before-table`, `flush-after-table`, `flush-after-manifest`, and `compact-after-manifest`. Actions are `error` (returns an I/O error and poisons the handle) and `exit` (exits with status 86 without destructors).
 
 ```bash
 cargo test --locked --features fault-injection --test failure_injection -- --nocapture
 ```
 
-This command is not available until the feature is implemented. The teammate's live demonstration should name the injected failure stage, stop a disposable writer, reopen, and show the acknowledged records that survived. Describe it as controlled process failure, not proof of hardware power-loss behavior.
+The parent test starts isolated subprocesses for all eight stage/action combinations. Reopening must preserve acknowledged values and sequences, avoid deleted-key resurrection, reject duplicate recovered receipt IDs, and allow a new checkpoint and valid transaction proof. This demonstrates controlled process failures; it does not simulate physical device power loss.
 
-## 8. Vijay: implement Merkle inclusion proofs
+## 7. Vijay: transaction block inclusion proofs
 
-### Current behavior
-
-The code verifies full SSTables and displays all Merkle levels. It does not yet export or verify an inclusion proof for one transaction's data block.
-
-### Files to study and extend
-
-- `src/merkle/mod.rs`: leaf/parent hashing, odd-node duplication, root construction.
-- `src/sstable/mod.rs`: block lookup, framed block bytes, saved leaves, and inspection tree.
-- A new proof module or proof types in the Merkle module.
-- Small agreed adapters in `src/db.rs`, `src/main.rs`, and `src/presentation/`.
-- New `tests/merkle_proof.rs`.
-
-### Implementation order
-
-1. Agree on proof fields: format version, leaf index, leaf count, sibling hashes and their ordering, table identity, and the framed block bytes or a clearly defined external block input.
-2. Generate the path from the data-block leaf to the root. A block at index B uses leaf index B+1 because the header is the first leaf.
-3. Include the actual complete leaf set: header, data blocks, metadata, and the final hash-list/footer leaf. Reuse the existing domain prefixes and odd-node duplication rule.
-4. Verify the leaf bytes, sibling path, index/count bounds, expected number of levels, and independently supplied trusted root.
-5. Decode the authenticated block and check that it contains the requested transaction key/value. Block membership alone must not be presented as proof of a different receipt.
-6. Define behavior for pending records: either require the user to flush first or explicitly flush before producing a proof.
-7. Add proof JSON export/import and CLI/presentation integration after the library implementation works.
-
-Do not accept a root simply because it is stored inside the same proof document. Select the expected root from an independently trusted checkpoint and verify table identity. The proof establishes inclusion of a block in that snapshot; it does not establish absence of other records or consistency between successive snapshots.
-
-### Completion checks
-
-Test first/middle/last data blocks, odd and even leaf counts, altered block bytes, a wrong sibling, a wrong root, malformed indices/counts/path lengths, unknown transaction IDs, and unflushed entries. Verification against a wrong checkpoint must fail.
-
-Run after creating the test:
+Use a new disposable database and new output filenames for this standalone demo:
 
 ```bash
+cargo run --locked -- --db proof-demo record --id tx-proof --from Alice --to Bob --amount-paise 1050 --timestamp-ms 1700000000000
+cargo run --locked -- --db proof-demo flush
+cargo run --locked -- --db proof-demo checkpoint proof-checkpoint.json
+cargo run --locked -- --db proof-demo prove tx-proof proof.json
+cargo run --locked -- verify-proof tx-proof proof.json proof-checkpoint.json
 cargo test --locked --test merkle_proof
 ```
 
-For the new live demo, export a proof for a chosen receipt, verify it against the trusted checkpoint, change its authenticated input, and show verification failing. Agree on the exact CLI names during implementation; no `prove` or `verify-proof` command is currently implemented.
+`prove` requires a flushed transaction; `checkpoint` also flushes. `verify-proof` does not open a database. It selects the expected table root from the independently trusted checkpoint, validates path shape, authenticates the framed block, decodes its ordered entries, and checks the requested receipt ID and fields. Change a framed-block byte in a copy of the proof JSON and repeat verification to demonstrate rejection.
 
-## 9. Tharunn: integrate and keep the demo accurate
+Keep the checkpoint independently of the proof sender. A proof reveals the whole block, potentially including other receipts. It establishes inclusion in that snapshot, not freshness, balances, absence, or consistency across snapshots. A new proof after compaction needs the corresponding new checkpoint; a previously exported proof remains tied to its original checkpoint. Proof construction reads/verifies the table; offline verification is compact. The interactive menu does not add proof options.
 
-1. Review the three interface notes before shared files change.
-2. Review and integrate one feature at a time, resolving changes in shared database/table/presentation modules.
-3. Preserve the existing default commands and data format unless an explicit migration decision is made.
-4. Run formatting, Clippy, default tests, and any feature-enabled recovery tests after integration.
-5. Update the live menu, README, ReportOne, and this guide to match actual available commands and outputs.
-6. Rehearse the entire presentation with each member explaining their implemented change.
-
-For each ordinary feature change:
+## 8. Integration validation
 
 ```bash
+git diff --check
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
+cargo test --locked --doc
 bash scripts/demo.sh
 ```
 
-If failure injection is added behind a feature, also add its explicit feature-enabled validation to CI. Passing default tests alone would not exercise disabled hooks.
-
-## 10. What each teammate hands back
-
-- A working feature branch containing their actual implementation commits.
-- A short design note stating the problem, chosen approach, and limitations.
-- Tests demonstrating correct behavior and meaningful failure cases.
-- A few commands or menu steps that reproduce their new functionality.
-- A review of another teammate's work.
-- An explanation they can deliver in the viva without reading code aloud.
-
-Use commit history, reviewed changes, tests, and demonstrations as evidence of contribution. Separate the original baseline from later work accurately; equal participation should come from real ownership and effort, not relabeling the initial implementation.
+The demo now includes proof export, successful offline verification, and rejection of a different transaction ID before its deliberate corruption exercise. CI runs strict Clippy across all features and tests both default and feature-enabled builds. See [TESTING.md](TESTING.md) for coverage and [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md) for the recorded local results.

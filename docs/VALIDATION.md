@@ -1,6 +1,8 @@
 # Local validation record
 
-Validated on 22 October 2026 in `/home/tharunn/Desktop/3sPADA`.
+The current integrated validation is recorded in [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md), dated 24 October 2026. It covers comparison with all three handoff patches, 40 passing default-build test functions, 42 with all features, strict Clippy, documentation, the extended demo, and both examples.
+
+The following is the historical baseline record from 22 October 2026 in `/home/tharunn/Desktop/3sPADA`.
 
 ## Environment
 

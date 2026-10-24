@@ -6,7 +6,7 @@ The supplied file was `/home/tharunn/Desktop/DSA_plan/Plan`, a UTF-8 text file w
 
 The current request is to implement the complete Rust project, with Tharunn owning all implementation and teammates doing final edge-case debugging. This supersedes the original inspect-only stopping point, stub-only foundation stage, and A/B/C/D implementation ownership restrictions.
 
-That arrangement produced the working baseline. The subsequent contribution discussion proposes substantial new implementation ownership: Nirlep on bounded range scans, Reshvanth on controlled failure/recovery verification, Vijay on Merkle inclusion proofs, and Tharunn on integration. These are planned extensions, not claims that the features or teammate contributions already exist. See [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md) for their contracts and demo plans.
+That arrangement produced the working baseline. The subsequent extensions are now merged: Nirlep on bounded range scans, Reshvanth on controlled failure/recovery verification, Vijay on Merkle inclusion proofs, and Tharunn on integration. See [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md) for their implemented contracts and demonstrations, and [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md) for patch comparison evidence.
 
 ## Implemented requirements
 
@@ -20,8 +20,10 @@ That arrangement produced the working baseline. The subsequent contribution disc
 - Error messages identifying a damaged data block when its framing remains readable.
 - External trusted checkpoints with table names, sizes, roots, generation, and persisted sequence.
 - Duplicate transaction ID rejection, integer paise, and no public update/delete API for ledger events.
-- Separate mutable key/value namespace with tombstones, sorted scans, flush, and full heap-based compaction.
-- CLI: `init`, `record`, `transaction`, `transactions`, `put`, `get`, `delete`, `scan`, `flush`, `compact`, `verify`, `checkpoint`, `stats`, `tamper`.
+- Separate mutable key/value namespace with tombstones, bounded heap-merged scans with measured block reads, flush, and full heap-based compaction.
+- Optional named failure injection with subprocess exit/error recovery tests.
+- Transaction block inclusion proofs verified against independently trusted checkpoint roots.
+- CLI: `init`, `record`, `transaction`, `transactions`, `put`, `get`, `delete`, `scan`, `flush`, `compact`, `verify`, `checkpoint`, `prove`, offline `verify-proof`, `stats`, `tamper`.
 - Interactive `present` mode accepts live input and shows actual storage traces, skip-list links, WAL frames, table blocks/index, Bloom decisions, and Merkle levels. It includes isolated edge-case and copy-tamper exercises.
 - Tests, CI configuration, a temporary-directory demo, library and timing examples, and beginner documentation.
 

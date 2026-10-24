@@ -35,6 +35,8 @@ An I/O failure can leave a write's outcome uncertain, so the handle is poisoned 
 - Unlisted temporary/orphan files can remain after crashes. They are ignored, not automatically garbage-collected.
 - No automatic repair of a corrupt table; verification reports corruption instead of inventing replacement data.
 - CLI display is intended for UTF-8 strings; binary library values display with replacement characters.
-- No inclusion-proof command, leveled compaction, compression, snapshot reader, or rigorous benchmark framework.
+- Inclusion proofs reveal the entire authenticated block and require an independently trusted checkpoint. They establish receipt inclusion in that snapshot, not freshness, absence, balances, or consistency between snapshots.
+- Failure injection is disabled by default. Builds with `fault-injection` deliberately honor process environment hooks that can abort publication or exit the process; use them on disposable databases for testing.
+- No leveled compaction, compression, snapshot reader, or rigorous benchmark framework.
 
 These constraints should be stated in the project demonstration. The project illustrates data structures and integrity mechanisms; it is not a production banking database.

@@ -1,44 +1,33 @@
 # Team implementation and presentation handoff
 
-## Updated ownership
+## Integrated ownership
 
-Tharunn D owns the initial working implementation. To give all four members substantial engineering ownership, the proposed next phase assigns implementation work to the other three members as well as review and debugging. These enhancements are planned, not already completed.
+The working baseline and all three teammate feature PRs are merged into local `main` at `45a4c62`. The local `origin/main` tracking reference also points there; this audit does not query live GitHub state.
 
-Follow [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md) for a complete input-by-input demonstration, file ownership, implementation order, expected behavior, and acceptance checks. The existing interactive demo is available now; optimized range scans, controlled failure hooks, and Merkle inclusion proofs are proposed extensions.
+| Owner | Contribution | Feature commit | Merge commit |
+| --- | --- | --- | --- |
+| Tharunn D | Baseline storage, ledger, CLI, presentation, integration | `953d390` | `ef4fb28` |
+| BODDUPALLLY NIRLEP | Bounded range scans | `48dc645` | `c20ea44` |
+| Reshvanth Yeddla | Failure injection and recovery tests | `bd0a053` | `45a4c62` |
+| Vijay Raghava Reddy | Merkle transaction block proofs | `71419cc` | `8cd75e5` |
 
-## Proposed GitHub issues
+The recorded feature merge order was Vijay, Nirlep, then Reshvanth. The supplied handoff recommends Nirlep, Reshvanth, then Vijay for applying raw patches. Comparing a reconstructed application in that order with the merged source found all changes present; the only difference is the order of the `range` and `inclusion_proof` methods. See [INTEGRITY_AUDIT.md](INTEGRITY_AUDIT.md) for evidence and limits.
 
-These are ready to copy into GitHub; no issues or messages have been posted.
+Do not reapply the patches to current `main`. Use a fresh branch from the integrated project for further changes and review the diff before committing. Accurately distinguish supplied implementation code from each member's own review, adaptations, tests, and understanding.
 
-| Issue title | Suggested owner | Acceptance evidence |
-| --- | --- | --- |
-| Add controlled failure injection and recovery verification | Reshvanth Yeddla | Stop a disposable writer at named publication stages; recover acknowledged records; test uncertain I/O outcomes |
-| Implement efficient bounded range scans | BODDUPALLLY NIRLEP | Correct lower-bound iterators and merged versions; reference-map agreement; fewer measured block reads on a narrow scan |
-| Implement block-level Merkle inclusion proofs | Vijay Raghava Reddy | Generate and verify receipt-block proofs against an independently trusted root; reject malformed/changed proofs |
-| Integrate enhancements and freeze the presentation version | Tharunn D | Shared adapters reviewed; default and feature-specific checks pass; documentation and menu match implemented features |
-
-## Suggested implementation branches
-
-After the baseline has been committed and published to the shared base branch, each feature owner can run the appropriate command in their own clone:
+## Validation before another merge
 
 ```bash
-git switch -c feat/recovery-failure-testing
-git switch -c feat/range-scans
-git switch -c feat/merkle-proofs
-```
-
-Choose one command per feature owner; do not run all three as a sequence to assign work. For each implementation or fix:
-
-```bash
-git status
+git diff --check
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets
-git add path/to/changed-file path/to/regression-test
-git commit -m "Fix <specific reproduced failure>"
+cargo test --locked --all-targets --all-features
+cargo test --locked --doc
+bash scripts/demo.sh
 ```
 
-Review the diff before committing. Use the branches above for the proposed enhancements; the original plan's stub-foundation branch split describes an earlier phase. Each member should implement, test, document, demonstrate, and review real work. Publishing and merging follow the repository owner's workflow.
+Follow [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md) for feature contracts and demos. Menu option 10 uses bounded scans. Failure injection is exercised through feature-enabled tests. Inclusion proof export/verification use the CLI and do not add menu options.
 
 ## Viva questions and short answers
 

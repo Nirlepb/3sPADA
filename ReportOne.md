@@ -25,14 +25,14 @@ The source plan combined several older instructions: inspect and stop, build onl
 
 | Person | Responsibility in the updated plan |
 | --- | --- |
-| Tharunn D | Own the complete implementation and integration |
-| BODDUPALLLY NIRLEP | Final review, edge-case testing, and debugging |
-| Reshvanth Yeddla | Final review, edge-case testing, and debugging |
-| Vijay Raghava Reddy | Final review, edge-case testing, and debugging |
+| Tharunn D | Baseline implementation and shared integration |
+| BODDUPALLLY NIRLEP | Merged bounded range scans, testing, and review |
+| Reshvanth Yeddla | Merged failure injection, recovery testing, and review |
+| Vijay Raghava Reddy | Merged Merkle inclusion proofs, testing, and review |
 
 The code already has automated checks. Your teammates' final debugging is an additional review stage. It does not mean handing them an untested skeleton.
 
-After the baseline was completed, the contribution discussion proposed a larger implementation role for each teammate: Nirlep can implement efficient bounded range scans, Reshvanth can add controlled failure/recovery verification, and Vijay can implement Merkle inclusion proofs. Tharunn retains baseline and integration responsibility. These are future assignments, not completed features. [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) gives the implementation order, files, acceptance checks, and exact live-demo inputs.
+The teammate extensions are now merged: Nirlep's bounded range scans, Reshvanth's controlled failure/recovery tests, and Vijay's Merkle inclusion proofs. Tharunn retains baseline and integration responsibility. [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) gives the implemented contracts, acceptance checks, and live-demo inputs; [INTEGRITY_AUDIT.md](docs/INTEGRITY_AUDIT.md) records the comparison with the supplied handoff patches.
 
 The current specification is [docs/ROADMAP.md](docs/ROADMAP.md). It also records important decisions where the original text disagreed with itself. For example, a complete WAL record with a bad checksum is an error; only an unfinished final record can be discarded during recovery.
 
@@ -97,6 +97,8 @@ Every project source file is inside the repository. The tree below lists the mai
 │   ├── db.rs                   Connect storage pieces into one database
 │   ├── manifest.rs             Active-table list and durable file publication
 │   ├── bloom.rs                Bloom filter
+│   ├── fault.rs                Optional named failure-injection hooks
+│   ├── proof.rs                Transaction block proof verification
 │   ├── presentation/
 │   │   ├── mod.rs              Interactive prompts, session, and copy-tamper exercise
 │   │   ├── views.rs            Actual skip-list, WAL, table, and Merkle displays
@@ -108,13 +110,16 @@ Every project source file is inside the repository. The tree below lists the mai
 │   ├── sstable/
 │   │   └── mod.rs              Sorted table builder, reader, and verification
 │   └── merkle/
-│       └── mod.rs              SHA-256 leaves, parents, and tree root
+│       └── mod.rs              SHA-256 leaves, parents, roots, and inclusion paths
 ├── tests/
 │   ├── common/
 │   │   └── mod.rs              Temporary directories and sample transactions
 │   ├── persistence.rs          Reopen, flush, scans, duplicate IDs, compaction
 │   ├── recovery.rs             Torn WAL writes and publication failures
 │   ├── integrity.rs            Corruption and trusted checkpoint tests
+│   ├── range_scan.rs           Bounded scans, binary keys, and selected-block tamper
+│   ├── failure_injection.rs    Publication failures and feature integration
+│   ├── merkle_proof.rs         Inclusion paths, transaction proofs, and proof CLI
 │   ├── crash_process.rs        Kill a real writer process and recover
 │   ├── cli.rs                  Test the actual terminal executable
 │   └── presentation.rs         Test typed inputs, traces, recovery, and menu exercises
@@ -132,7 +137,11 @@ Every project source file is inside the repository. The tree below lists the mai
     ├── TESTING.md              Test coverage and teammate checklist
     ├── TEAM_HANDOFF.md         Review tasks, branch commands, viva questions
     ├── PRESENTATION.md         Menu choices, input values, and live demo sequence
-    ├── RUN_AND_IMPLEMENT.md    Full demo script and proposed teammate implementation guide
+    ├── RUN_AND_IMPLEMENT.md    Full demo script and merged teammate feature guide
+    ├── NIRLEP_RANGE_SCANS.md    Bounded scan implementation notes
+    ├── RESHVANTH_FAILURE_TESTING.md  Optional failure testing notes
+    ├── VIJAY_MERKLE_PROOFS.md   Proof commands and trust boundaries
+    ├── INTEGRITY_AUDIT.md       Patch comparison and integration validation
     └── VALIDATION.md           Recorded local verification results
 ```
 
@@ -260,7 +269,7 @@ The sparse index stores each block's first key, file offset, and length. It is �
 
 `get` first asks the Bloom filter. If the key might be present, binary search chooses an index entry. `read_block` reads that block and checks its hash again. A second binary search finds the entry inside the decoded block.
 
-`iter` reads blocks in order and returns their entries; scans and compaction use it. `verify` reopens and fully checks the table against expected metadata. Count methods support statistics. `block_payload_offset` supports the explicit demonstration command that changes a byte.
+`iter` reads blocks in order and returns their entries; compaction and full ledger listing use it. Bounded scans use `range` to select candidate blocks through the sparse index. `inclusion_proof` exports an authenticated block and Merkle path. `verify` reopens and fully checks the table against expected metadata. Count methods support statistics. `block_payload_offset` supports the explicit demonstration command that changes a byte.
 
 Files have a header, framed data blocks, metadata JSON, saved hashes, a footer, and a root. The exact byte offsets are documented in [FILE_FORMAT.md](docs/FILE_FORMAT.md). Bad lengths are bounded before use, and a table is limited to 256 MiB.
 
@@ -315,7 +324,8 @@ This module is the main application-facing API. It owns the directory path, opti
 | `record` | Validate and append a financial event with a new ID |
 | `get_transaction` | Find one financial receipt by ID |
 | `transactions` | List receipts in ID byte order |
-| `scan` | List visible mutable keys between optional bounds |
+| `scan`, `scan_with_block_reads` | Heap-merge bounded streams; optionally report data block reads |
+| `transaction_proof` | Export a flushed receipt block and its Merkle inclusion path |
 | `flush` | Turn pending memory entries into a durable table |
 | `compact` | Merge all active tables and remove obsolete versions/tombstones |
 | `verify` | Recheck manifest, tables, and WAL checksums |
@@ -323,7 +333,7 @@ This module is the main application-facing API. It owns the directory path, opti
 | `verify_checkpoint` | Compare the exact current flushed state with that file |
 | `stats` | Return counters useful for inspection and the demo |
 
-The internal `lookup` checks memory first and tables newest first. `write` gives an entry its sequence and performs WAL-before-memory ordering. `healthy` prevents continued use after an uncertain write failure. `next_manifest` advances generation safely. `merged` and `insert_newest` help scans select the newest version per key. Namespace validation prevents mixing financial records with ordinary demo values.
+The internal `lookup` checks memory first and tables newest first. `write` gives an entry its sequence and performs WAL-before-memory ordering. `healthy` prevents continued use after an uncertain write failure. `next_manifest` advances generation safely. `merged` and `insert_newest` select the newest version per key for ledger listing. Bounded mutable scans merge range iterators with a heap and report block reads through `scan_with_block_reads`. Namespace validation prevents mixing financial records with ordinary demo values.
 
 The prefixes are `k:` for mutable keys and `t:` for transactions. If you ask `put` to write the literal key `t:tx-001`, it actually stores `k:t:tx-001`. It cannot change the real receipt at `t:tx-001`.
 
@@ -357,7 +367,7 @@ The `present` command opens a menu that stays running. You enter a number, then 
 
 For the live explanations, `Db::enable_trace` enables a per-handle event list. Database and table lookup functions record what they actually did. `take_trace` drains those messages after the operation. This uses Rust's `RefCell` to allow a read operation to record diagnostic messages through an otherwise shared reference. Tracing starts disabled for normal library use. Read-only helpers provide memtable entries/levels and verified table snapshots; they do not edit the file format.
 
-Commands include setup, financial records, mutable examples, scans, maintenance, verification, checkpoints, statistics, and deliberate tampering. Errors print to stderr and give a failure exit code. This lets scripts tell success from failure.
+Commands include setup, financial records, mutable examples, scans, maintenance, verification, checkpoints, `prove`, offline `verify-proof`, statistics, and deliberate tampering. Errors print to stderr and give a failure exit code. This lets scripts tell success from failure.
 
 The `tamper` command requires `--allow-demo-tamper`. It opens a selected table and flips one byte in a selected block. It should be used only on a disposable database, because it intentionally makes that table fail verification. Ordinary commands never rewrite a published table in place.
 
@@ -445,10 +455,11 @@ Every file in `docs/` has a separate purpose:
 | `FILE_FORMAT.md` | How to interpret every binary field and JSON field on disk |
 | `SECURITY.md` | What verification proves, what it cannot prove, and practical limits |
 | `TESTING.md` | What is covered and what teammates should investigate next |
-| `TEAM_HANDOFF.md` | Suggested review issues, branch commands, and viva answers |
+| `TEAM_HANDOFF.md` | Merged ownership, validation commands, and viva answers |
+| `INTEGRITY_AUDIT.md` | Handoff patch comparison and integrated validation results |
 | `VALIDATION.md` | Which checks were actually run locally and their observed results |
 | `PRESENTATION.md` | Which menu choices and sample inputs to use during a live under-the-hood demonstration |
-| `RUN_AND_IMPLEMENT.md` | How to run the complete demo and implement the proposed next contribution for each teammate |
+| `RUN_AND_IMPLEMENT.md` | How to run the complete demo and validate the merged teammate contributions |
 
 ## 20. Run the project yourself
 
@@ -458,6 +469,7 @@ From the repository:
 cd /home/tharunn/Desktop/3sPADA
 cargo build --locked
 cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 bash scripts/demo.sh
 ```
 

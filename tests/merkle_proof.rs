@@ -71,6 +71,20 @@ fn transaction_proofs_are_bound_to_receipt_and_checkpoint() {
             .verify("tx-000", &checkpoint)
             .is_err()
     );
+    let compacted_path = temp.path().join("compacted-checkpoint.json");
+    db.checkpoint(&compacted_path).unwrap();
+    let compacted = Manifest::read(&compacted_path).unwrap();
+    drop(db);
+    let db = Db::open(temp.db()).unwrap();
+    for id in ["tx-000", "tx-045", "tx-089"] {
+        assert_eq!(
+            db.transaction_proof(id)
+                .unwrap()
+                .verify(id, &compacted)
+                .unwrap(),
+            transaction(id)
+        );
+    }
 }
 
 #[test]

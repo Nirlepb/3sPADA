@@ -21,6 +21,12 @@ fi
 "${ledger[@]}" stats
 "${ledger[@]}" checkpoint "$demo_root/checkpoint.json"
 "${ledger[@]}" verify --checkpoint "$demo_root/checkpoint.json"
+"${ledger[@]}" prove tx-001 "$demo_root/proof.json"
+"${ledger[@]}" verify-proof tx-001 "$demo_root/proof.json" "$demo_root/checkpoint.json"
+if "${ledger[@]}" verify-proof missing-id "$demo_root/proof.json" "$demo_root/checkpoint.json"; then
+    echo "ERROR: proof verified for the wrong transaction" >&2
+    exit 1
+fi
 "${ledger[@]}" tamper --table 0 --block 0 --allow-demo-tamper
 if "${ledger[@]}" verify >"$demo_root/verify.out" 2>&1; then
     echo "ERROR: corruption was accepted" >&2
@@ -31,4 +37,4 @@ if ! grep -q 'data block 0' "$demo_root/verify.out"; then
     echo "ERROR: expected a data block 0 diagnostic" >&2
     exit 1
 fi
-echo "PASS: persistence, duplicate rejection, compaction, checkpoint, and tamper detection"
+echo "PASS: persistence, duplicate rejection, compaction, checkpoint, inclusion proof, and tamper detection"
