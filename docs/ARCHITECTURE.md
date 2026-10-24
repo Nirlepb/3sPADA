@@ -60,7 +60,7 @@ The OS releases `LOCK` on process exit or termination. The file remains; no stal
 
 Opening a table verifies its entire file and validates metadata, but retains only the index, Bloom filter, expected hashes, and path. Later lookups read the chosen block from disk. Restart is consequently more expensive than a lazy-validation design.
 
-`scan` combines entries into a `BTreeMap`, keeping the greatest sequence per key. It excludes tombstones and financial entries, strips internal prefixes, and applies inclusive-start/exclusive-end bounds. `transactions` returns ledger records sorted by ID bytes, not timestamp.
+`scan` seeks bounded skip-list and SSTable streams, then heap-merges them while keeping the greatest sequence per key. It removes tombstones after resolving versions, excludes the financial namespace, and strips internal prefixes. Bounds are inclusive start and exclusive end in byte order. `scan_with_block_reads` also reports candidate data blocks actually read by the query; startup still verifies all tables. `transactions` uses a full `BTreeMap` merge and returns ledger records sorted by ID bytes, not timestamp.
 
 ## Compaction
 
@@ -74,6 +74,12 @@ Write the replacement table, commit a new manifest, then delete retired files an
 
 `verify --checkpoint` checks current tables and WAL, requires exact manifest equality, and requires no unflushed entries. It proves equality to that snapshot, not append-only history across snapshots. Later legitimate writes or compaction change the snapshot too.
 
+## Inclusion proofs and failure hooks
+
+`transaction_proof` rejects pending transactions and selects the persisted table containing the requested ID. It exports the complete framed block and a Merkle sibling path. `TransactionProof::verify` authenticates that block against a table root selected from an independently trusted manifest/checkpoint and validates the requested receipt. The `verify-proof` CLI executes before database opening and works offline.
+
+With the optional `fault-injection` feature, named hooks surround table/manifest publication. An injected error poisons the handle; an injected process exit skips destructors. Tests reopen each resulting store and check recovered scans, receipts, and proofs. Default builds do not invoke these hooks.
+
 ## Approximate costs
 
 | Operation | Main cost |
@@ -85,7 +91,7 @@ Write the replacement table, commit a new manifest, then delete retired files an
 | Table open/full verify | O(file bytes), temporary memory proportional to file/decoded data |
 | Single-table lookup | Bloom hashing + O(log blocks) index + one block read/decode/search |
 | DB lookup | Memtable, then up to all active tables |
-| Scan | O(N log U), retaining U unique keys from N entries |
+| Bounded scan | Skip-list/index seeks, candidate block decoding, and O(R log(T + 1)) merge for R matching entries across T tables plus memory; retains unique output and one decoded block per table |
 | Heap merge | O(N log T) for T tables, plus output allocation/writing |
 
 The memtable threshold counts encoded bytes, not allocator overhead. Its default is 1 MiB, configurable from 1 byte to 64 MiB. Compaction is explicit; there are no automatically maintained LSM levels.

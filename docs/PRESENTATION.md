@@ -1,6 +1,6 @@
 # Interactive presentation guide
 
-For a combined run-through and teammate implementation plan, see [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md). This document describes the currently implemented menu; planned teammate enhancements are listed separately in that guide.
+For a combined run-through and the merged teammate features, see [RUN_AND_IMPLEMENT.md](RUN_AND_IMPLEMENT.md). Menu option 10 uses bounded scans and reports block reads in its trace. Proof export/verification use the separate CLI; failure injection is an optional test feature. The interactive menu retains its existing options.
 
 ## Start here
 

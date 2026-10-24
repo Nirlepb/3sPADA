@@ -70,3 +70,25 @@ fn cli_scan_delete_and_compact() {
     success(run(&temp, &["verify"]));
     assert!(success(run(&temp, &["stats"])).contains("\"sstables\": 1"));
 }
+
+#[test]
+fn failure_hooks_are_enabled_only_by_the_feature() {
+    let temp = TempDir::new("cli-fault-feature");
+    success(run(&temp, &["put", "ack", "durable"]));
+    let output = Command::new(env!("CARGO_BIN_EXE_merklelsm"))
+        .arg("--db")
+        .arg(temp.db())
+        .arg("flush")
+        .env("MERKLELSM_FAULT_STAGE", "flush-after-table")
+        .env("MERKLELSM_FAULT_ACTION", "exit")
+        .output()
+        .unwrap();
+    if cfg!(feature = "fault-injection") {
+        assert_eq!(output.status.code(), Some(86));
+    } else {
+        success(output);
+    }
+    assert_eq!(success(run(&temp, &["get", "ack"])).trim(), "\"durable\"");
+    success(run(&temp, &["flush"]));
+    success(run(&temp, &["verify"]));
+}

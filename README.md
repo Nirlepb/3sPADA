@@ -4,16 +4,16 @@ A working educational LSM database with a safe skip-list memtable, durable write
 
 Start with [ReportOne.md](ReportOne.md) for the beginner explanation of every directory and file. The current specification is [docs/ROADMAP.md](docs/ROADMAP.md); the supplied plan is preserved in [docs/ORIGINAL_PLAN.txt](docs/ORIGINAL_PLAN.txt).
 
-## Team and updated contribution plan
+## Team and merged contributions
 
-| Name | Roll number | Proposed next contribution |
+| Name | Roll number | Merged contribution |
 | --- | --- | --- |
 | BODDUPALLLY NIRLEP | CB.SC.U4CSE25313 | Efficient bounded range scans, tests, and storage demonstration |
 | Reshvanth Yeddla | CB.SC.U4CSE25347 | Controlled failure injection, recovery verification, and regression fixes |
 | Tharunn D | CB.SC.U4CSE25359 | Baseline implementation, shared integration, documentation, and full demonstration |
 | Vijay Raghava Reddy | CB.SC.U4CSE25363 | Merkle inclusion proofs, tests, and verification demonstration |
 
-The working baseline is already implemented. The three teammate enhancements above are proposed work, not existing commands. See [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) for implementation steps and the current live-demo script.
+The baseline and all three teammate enhancements are merged. Bounded scans use the existing scan command and menu option 10; failure injection is enabled only with the `fault-injection` feature; Merkle proofs use the `prove` and `verify-proof` CLI commands. See [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) for the integrated run guide and [docs/INTEGRITY_AUDIT.md](docs/INTEGRITY_AUDIT.md) for the patch comparison and validation results.
 
 ## Build and test
 
@@ -23,8 +23,9 @@ Use Linux and Rust 1.89 or newer with Cargo. The implementation uses OS file loc
 cd /home/tharunn/Desktop/3sPADA
 cargo build --locked
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 cargo test --locked --doc
 bash scripts/demo.sh
 ```
@@ -110,8 +111,8 @@ The benchmark requires a new directory and retains it for inspection. It times d
 | [FILE_FORMAT.md](docs/FILE_FORMAT.md) | Exact bytes, Merkle rules, manifest/checkpoint schema |
 | [SECURITY.md](docs/SECURITY.md) | Trust boundaries and limitations |
 | [TESTING.md](docs/TESTING.md) | Automated coverage and final teammate review checklist |
-| [TEAM_HANDOFF.md](docs/TEAM_HANDOFF.md) | Proposed review issues, branch commands, and viva questions |
+| [TEAM_HANDOFF.md](docs/TEAM_HANDOFF.md) | Merged feature ownership, validation, and viva questions |
 | [PRESENTATION.md](docs/PRESENTATION.md) | Interactive menu, sample inputs, and live demonstration sequence |
-| [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) | Full run/demo guide plus proposed teammate feature implementation plans |
+| [RUN_AND_IMPLEMENT.md](docs/RUN_AND_IMPLEMENT.md) | Full run/demo guide and merged teammate feature contracts |
 
-There is no networking, asynchronous runtime, background worker, automatic leveled compaction, encryption, or inclusion-proof CLI. Tables are capped at 256 MiB; scans and compaction collect output in memory. Every database handle takes an exclusive lock. These choices keep the implementation appropriate for a data-structures project.
+There is no networking, asynchronous runtime, background worker, automatic leveled compaction, or encryption. Inclusion proofs are available through the CLI. Tables are capped at 256 MiB; scans and compaction collect output in memory. Every database handle takes an exclusive lock. These choices keep the implementation appropriate for a data-structures project.
